@@ -38,7 +38,7 @@ command -v xclip &>/dev/null || PACKAGES="$PACKAGES xclip"
 
 if [ -n "$PACKAGES" ]; then
     echo "安裝: $PACKAGES"
-    install_pkg $PACKAGES
+    install_pkg $PACKAGES || echo "警告：部分套件安裝失敗，請手動安裝"
 else
     echo "基本工具已安裝"
 fi
