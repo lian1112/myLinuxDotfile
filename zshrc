@@ -3,6 +3,11 @@
 
 # Path to your Oh My Zsh installation.
 export ZSH="$HOME/.oh-my-zsh"
+# 讓多個終端機視窗共享歷史紀錄
+#setopt SHARE_HISTORY
+
+# 指令執行完立刻寫入檔案，而不是等關閉視窗才寫
+setopt INC_APPEND_HISTORY
 
 # Set name of the theme to load --- if set to "random", it will
 # load a random theme each time Oh My Zsh is loaded, in which case,
@@ -43,8 +48,8 @@ ZSH_THEME="maran"
 # Uncomment the following line to disable colors in ls.
 # DISABLE_LS_COLORS="true"
 
-# Uncomment the following line to disable auto-setting terminal title.
-# DISABLE_AUTO_TITLE="true"
+# 禁用 oh-my-zsh 自動設定 title（避免覆蓋 Claude Code 的對話名稱）
+DISABLE_AUTO_TITLE="true"
 
 # Uncomment the following line to enable command auto-correction.
 # ENABLE_CORRECTION="true"
@@ -99,7 +104,8 @@ bindkey '^?' backward-delete-char # Backspace
 # export MANPATH="/usr/local/man:$MANPATH"
 
 # You may need to manually set your language environment
-# export LANG=en_US.UTF-8
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
 
 # Preferred editor for local and remote sessions
 # if [[ -n $SSH_CONNECTION ]]; then
@@ -578,6 +584,7 @@ export AWS_ACCESS_KEY_ID="ASIA2OY732VRSNZMLAV6"
 export AWS_SECRET_ACCESS_KEY="VzQLyYHJvM5nI77Nwl/29jipKRLfmjL05tRLOo+9"
 export AWS_SESSION_TOKEN="IQoJb3JpZ2luX2VjEHIaCXVzLWVhc3QtMSJIMEYCIQDosGuQIHn1wI+q3T5YnBTWnvgnXGr5gBAHX7OvT7CoTAIhANa9amG6qYckKtK0lnm6IvUnaIouxY3GLFyiI6NStVF+KpQDCJv//////////wEQABoMNzE4OTM2OTg2OTc5IgxGnw7a5RxmQ3QBrCAq6AJPmyoZ0I6XFznwsanxB/prwnrb//w1MskIzssPRKNrrw6XACOqPBVAklDsjPgfbHNjSuMNvyvXio/CnU+QRUcwn0/5rpDzd2b1vImmnuKsoGy/2+++QWwdV3F+83kWhmeVdzCvODR4+Gg+awVrI7mnZwIVpTqFUzSsQv2/lb3yfIY52U3Sa0jYSraDq/dVdr0AWehYByebRkjDhYDNJ/Xo2o28WlGoCKFWe2qd6T6xrSOSr7xkQacu235UwEkYVoPSaL2kszE1TlSuLosefjIcTWlQkdJ88mN1sM+TG9dD29/6CzwmEYaoqert0H97yQDhjEsZSPrfh5CnMKt27XBS7PEaLjLKbKIzOguQXvYAW8GOGytnkfqQ32xy2GdhQlUVb/lsl0akkOJWIJ+Gfi7CSFdMBojBBgl8aazAyt+x/BpA0PvnG6miF9hqRwXosjinSE1BscODjVFlB4Wtdkd9iAmISxYqYc0w7NGgxAY6pQES0oiViwZs+hWxxswxgJe5jP1VTm9QHVVZf/tNpiaZ6UFlLcmBdtjYdF2cBWeAMxt7MBqAYudXr1vDSezFqt+l6RwoXhgLrmBYDBRVuYPHDyqyLQlwfJnhppzKiafDaLqxOqx5ZIs/vC/sSkxbKB117B2tPi5K2XxRsB+LSDw7cS06B3fJaWgqp8j9UcdzTbXJleGElndwn6r7qfWsWHit6vqCAZU="
 if [ -z "$DISPLAY" ]; then export DISPLAY=allenl-2404:11.0; fi
+
 alias mycontainer='xhost +local:docker 2>/dev/null && docker start my_persistent_container 2>/dev/null && docker exec -it -e DISPLAY=$DISPLAY my_persistent_container zsh'
 
 alias safe_reboot='sudo /home/allenl/safe_reboot.sh'
@@ -656,3 +663,145 @@ if [[ -n "$SSH_CLIENT" || -n "$SSH_TTY" ]]; then
         detect_xserver
     fi
 fi
+
+
+
+
+alias python=python3
+alias pip=pip3
+
+# ============ Tmux 自動連線設定 ============
+
+# SSH 連線時自動進入 tmux（同 session，最多 MAX_WINDOWS 個 window）
+if [[ -n "$SSH_CLIENT" || -n "$SSH_TTY" ]] && [[ -z "$TMUX" ]]; then
+    SESSION="session0"
+    MAX_WINDOWS=7
+    LOCK_DIR="/tmp/tmux_${SESSION}.lock"
+    MARKER_DIR="/tmp/tmux_${SESSION}_markers"
+
+    # 原子鎖
+    while ! mkdir "$LOCK_DIR" 2>/dev/null; do sleep 0.1; done
+
+    mkdir -p "$MARKER_DIR"
+    MY_MARKER="$MARKER_DIR/$$"
+
+    # 建立 session（如果不存在）
+    tmux has-session -t $SESSION 2>/dev/null || tmux new-session -d -s $SESSION
+
+    # 取得現有 windows
+    existing_windows=($(tmux list-windows -t $SESSION -F "#{window_index}" 2>/dev/null))
+
+    # 取得已 attach 的 clients: PID -> window 映射
+    typeset -A attached_pids
+    while IFS=: read -r pid win; do
+        attached_pids[$pid]=$win
+    done < <(tmux list-clients -F '#{client_pid}:#{window_index}' 2>/dev/null)
+
+    # 取得真正 attached 的 windows
+    attached_windows=(${(v)attached_pids})
+
+    # 清理 stale markers + 收集真正 pending 的 windows
+    # Marker 只在「選擇但還沒 attach」的短暫期間有效
+    pending_windows=()
+    for marker in "$MARKER_DIR"/*(.N); do
+        pid=${marker:t}
+        if kill -0 "$pid" 2>/dev/null; then
+            # 進程還活著
+            if [[ -n "${attached_pids[$pid]}" ]]; then
+                # 已經 attach 了，marker 是 stale，刪除
+                rm -f "$marker"
+            else
+                # 還沒 attach，是真正 pending
+                pending_windows+=("$(cat "$marker")")
+            fi
+        else
+            # 進程死了
+            rm -f "$marker"
+        fi
+    done
+
+    # 合併：真正 attached + 真正 pending
+    occupied=($attached_windows $pending_windows)
+
+    # 策略：優先創建新 window，達到上限後才複用
+    target_window=""
+
+    if (( ${#existing_windows[@]} < MAX_WINDOWS )); then
+        # 還沒達到上限，創建新 window
+        tmux new-window -t "$SESSION"
+        target_window=$(tmux list-windows -t $SESSION -F "#{window_index}" | tail -1)
+    else
+        # 達到上限，找連線數最少的 window（平均分配）
+        local min_count=999 min_win=""
+        for win in $existing_windows; do
+            local count=0
+            for occ in $occupied; do [[ "$occ" == "$win" ]] && ((count++)); done
+            (( count < min_count )) && { min_count=$count; min_win=$win; }
+        done
+        target_window=$min_win
+    fi
+
+    # 創建標記（只在 attach 前短暫存在）
+    echo $target_window > "$MY_MARKER"
+
+    # 釋放鎖
+    rmdir "$LOCK_DIR" 2>/dev/null
+
+    # attach（linked session，斷線自動清理）
+    # 注意：exec 後 marker 會在下次連線時被清理（因為 PID 已在 attached_pids 中）
+    exec tmux new-session -t $SESSION \; set-option destroy-unattached on \; select-window -t ":${target_window}"
+fi
+# Tmux 查詢 alias
+alias tmc='tmux list-clients -t session0'
+alias tmcn='tmux list-clients -t session0 | wc -l'
+
+# ============ Tmux Window Name 控制 ============
+# TAB_NAME_MODE: "claude" (預設，Claude 優先) 或 "folder" (永遠顯示目錄)
+TAB_NAME_MODE="${TAB_NAME_MODE:-claude}"
+
+# 切換 tab 名稱模式的函數
+tab_mode() {
+    case "$1" in
+        claude|c)
+            export TAB_NAME_MODE="claude"
+            echo "Tab 模式: Claude 優先 (有 claude 進程時讓 claude 控制名稱)"
+            ;;
+        folder|f|dir|d)
+            export TAB_NAME_MODE="folder"
+            echo "Tab 模式: 永遠顯示目錄名稱"
+            ;;
+        ""|status)
+            echo "當前 Tab 模式: $TAB_NAME_MODE"
+            echo "可用模式: claude (c), folder (f)"
+            ;;
+        *)
+            echo "用法: tab_mode [claude|folder|status]"
+            echo "  claude (c): Claude 優先模式"
+            echo "  folder (f): 永遠顯示目錄"
+            ;;
+    esac
+}
+
+precmd() {
+    if [[ -n "$TMUX" ]]; then
+        if [[ "$TAB_NAME_MODE" == "folder" ]]; then
+            # folder 模式：永遠顯示目錄名
+            printf '\033]0;%s\007' "${PWD##*/}"
+        else
+            # claude 模式（預設）：檢查 claude 進程
+            local pane_pid=$(tmux display-message -p '#{pane_pid}' 2>/dev/null)
+            local has_claude=false
+
+            if [[ -n "$pane_pid" ]] && pgrep -P "$pane_pid" -f "claude" >/dev/null 2>&1; then
+                has_claude=true
+            fi
+
+            if [[ "$has_claude" == "false" ]]; then
+                # Claude 沒在運行，設定為目錄名
+                printf '\033]0;%s\007' "${PWD##*/}"
+            fi
+        fi
+    else
+        printf '\033]0;%s\007' "${PWD##*/}"
+    fi
+}

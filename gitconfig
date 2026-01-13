@@ -1,0 +1,11 @@
+[user]
+	email = a9115077@gapps.ntust.edu.tw
+	name = allenl
+[credential]
+	helper = store
+[credential "https://github.com"]
+	helper = 
+	helper = !/usr/bin/gh auth git-credential
+[credential "https://gist.github.com"]
+	helper = 
+	helper = !/usr/bin/gh auth git-credential
